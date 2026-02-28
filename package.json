@@ -1,0 +1,18 @@
+{
+  "name": "mega-terminal",
+  "version": "1.0.0",
+  "description": "Multi-AI collaborative terminal - Claude + Codex side by side",
+  "main": "src/index.js",
+  "bin": {
+    "mega-terminal": "src/index.js"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": ["ai", "terminal", "claude", "codex", "multi-agent"],
+  "author": "Zilmaks Inc.",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {}
+}
