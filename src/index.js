@@ -33,8 +33,10 @@ function stripAnsi(str) {
     .replace(/\x1b\[([0-9]*)C/g, (_, n) => ' '.repeat(parseInt(n) || 1))
     .replace(/\x1b\[[0-9;]*[A-BD-Za-z]/g, '')
     .replace(/\x1b\][^\x07]*\x07/g, '')
+    .replace(/\x1b\][^\x1b]*\x1b\\/g, '')
     .replace(/\x1b[()][AB012]/g, '')
-    .replace(/[\x00-\x08\x0e-\x1f]/g, '');
+    .replace(/\x1b\[?[?;0-9]*[hl]/g, '')
+    .replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '');
 }
 
 function escapeTmux(str) {
@@ -140,17 +142,31 @@ function capturePane(pane) {
   return run(`tmux capture-pane -J -p -S -80 -t ${SESSION_NAME}:0.${pane}`);
 }
 
-function extractMessages(text, tag, labelSelf, labelOther) {
+function sanitizeRoutedMessage(msg) {
+  return stripAnsi(msg)
+    .replace(/\r/g, '')
+    .replace(/\n/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function extractMessages(text, tag, labelSelf, labelOther, options = {}) {
+  const maxLen = options.maxLen || 0;
   const results = [];
-  const regex = new RegExp(`${tag}\\s*(.+)`, 'g');
-  let match;
-  while ((match = regex.exec(text)) !== null) {
-    const msg = match[1].trim();
-    // Loop prevention: check the whole line for forwarded message labels
-    const lineStart = text.lastIndexOf('\n', match.index);
-    const lineBefore = text.slice(lineStart + 1, match.index);
-    if (lineBefore.includes(labelSelf) || lineBefore.includes(labelOther)) continue;
+  const cleaned = stripAnsi(text);
+  const lines = cleaned.split('\n');
+  const prefix = tag.toLowerCase();
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) continue;
+    if (line.includes(labelSelf) || line.includes(labelOther)) continue;
+    if (!line.toLowerCase().startsWith(prefix)) continue;
+
+    const msgRaw = line.slice(tag.length);
+    const msg = sanitizeRoutedMessage(msgRaw);
     if (!msg || msg.length < 3) continue;
+    if (maxLen > 0 && msg.length > maxLen) continue;
     results.push(msg);
   }
   return results;
@@ -158,11 +174,18 @@ function extractMessages(text, tag, labelSelf, labelOther) {
 
 function startMessageRouter() {
   const fileSize = { claude: 0, codex: 0 };
-  const sentMessages = new Set();
+  const sentMessages = new Map();
+  const MESSAGE_TTL_MS = 10 * 60 * 1000;
+  const MAX_TRACKED = 200;
 
   log('Router started');
 
   const interval = setInterval(() => {
+    const now = Date.now();
+    for (const [key, ts] of sentMessages.entries()) {
+      if (now - ts > MESSAGE_TTL_MS) sentMessages.delete(key);
+    }
+
     // --- Claude pane: detect new content, extract @codex: messages ---
     if (hasNewContent(CLAUDE_LOG, fileSize, 'claude')) {
       const captured = capturePane(0);
@@ -174,7 +197,7 @@ function startMessageRouter() {
         for (const msg of messages) {
           const key = 'c2x:' + msg.slice(0, 120);
           if (!sentMessages.has(key)) {
-            sentMessages.add(key);
+            sentMessages.set(key, now);
             log(`ROUTE Claude->Codex: ${msg.slice(0, 200)}`);
             sendToPane(1, `[From Claude] ${msg}`);
           }
@@ -188,16 +211,27 @@ function startMessageRouter() {
       if (captured) {
         const lines = captured.split('\n');
         const text = lines.slice(0, -1).join('\n');
-        const messages = extractMessages(text, '@claude:', '[From Codex]', '[From Claude]');
+        const messages = extractMessages(
+          text,
+          '@claude:',
+          '[From Codex]',
+          '[From Claude]',
+          { maxLen: 52 }
+        );
         for (const msg of messages) {
           const key = 'x2c:' + msg.slice(0, 120);
           if (!sentMessages.has(key)) {
-            sentMessages.add(key);
+            sentMessages.set(key, now);
             log(`ROUTE Codex->Claude: ${msg.slice(0, 200)}`);
             sendToPane(0, `[From Codex] ${msg}`);
           }
         }
       }
+    }
+
+    while (sentMessages.size > MAX_TRACKED) {
+      const oldestKey = sentMessages.keys().next().value;
+      sentMessages.delete(oldestKey);
     }
   }, 2000);
 
