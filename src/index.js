@@ -104,10 +104,8 @@ function createTmuxSession() {
   run(`tmux set-option -t ${SESSION_NAME} status-right " Opt+Drag:Copy | Ctrl+B d:Detach "`);
   run(`tmux set-option -t ${SESSION_NAME} status-right-length 45`);
 
-  // Mouse off by default so normal drag-select + Cmd+C works in terminal
-  run(`tmux set-option -t ${SESSION_NAME} mouse off`);
-  // Toggle mouse mode when needed (pane click/resize helpers)
-  run(`tmux bind-key -t ${SESSION_NAME} m if-shell -F "#{mouse}" "set -t ${SESSION_NAME} mouse off \\; display-message 'Mouse OFF (Cmd+C copy mode)'" "set -t ${SESSION_NAME} mouse on \\; display-message 'Mouse ON (pane click mode)'"`);
+  // Keep mouse interaction enabled (pane click/resize).
+  run(`tmux set-option -t ${SESSION_NAME} mouse on`);
   // Clipboard integration (macOS)
   run(`tmux set-option -t ${SESSION_NAME} set-clipboard on`);
   run(`tmux set-option -t ${SESSION_NAME} mode-keys vi`);
@@ -123,6 +121,9 @@ function createTmuxSession() {
   // quick bindings: Prefix + y copies current line, Prefix + Y copies visible pane
   run(`tmux bind-key -t ${SESSION_NAME} y capture-pane -p -S -1 | pbcopy`);
   run(`tmux bind-key -t ${SESSION_NAME} Y capture-pane -p -S -80 | pbcopy`);
+  // no-switch hotkeys: Alt+C copy pane, Alt+V paste system clipboard
+  run(`tmux bind-key -n M-c capture-pane -p -S -80 | pbcopy`);
+  run(`tmux bind-key -n M-v run-shell "tmux set-buffer -- \\\"$(pbpaste)\\\"; tmux paste-buffer"`);
 
   // Resize-friendly: use latest client size, aggressive resize
   run(`tmux set-option -t ${SESSION_NAME} window-size latest`);
@@ -301,8 +302,8 @@ function main() {
   console.log(`  ╚══════════════════════════════════════╝`);
   console.log('');
   console.log(`  ${dim}Controls:${reset}`);
-  console.log('    Drag select + Cmd+C  → Copy (default)');
-  console.log('    Prefix + m           → Toggle mouse on/off');
+  console.log('    Alt+C                → Copy current pane');
+  console.log('    Alt+V                → Paste clipboard');
   console.log('    Prefix + [           → Enter copy mode');
   console.log('    In copy mode: v/y    → Select + copy to clipboard');
   console.log('    Prefix + y / Prefix + Y → Copy line / pane');
