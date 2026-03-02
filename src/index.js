@@ -138,23 +138,31 @@ function createTmuxSession() {
 
 // --- Message Router ---
 
-// Hybrid approach: pipe-pane file size detects new content (resize-immune),
-// capture-pane gets clean visible text (no ANSI codes, no TUI chrome)
-
-function hasNewContent(filePath, sizeObj, key) {
+// Incremental parser: read ONLY newly appended bytes from pipe-pane logs.
+// This avoids duplicate routing when terminal redraws/resizes.
+function readNewContent(filePath, sizeObj, key) {
   try {
     const stat = fs.statSync(filePath);
-    if (stat.size > sizeObj[key]) {
-      sizeObj[key] = stat.size;
-      return true;
+    const previous = sizeObj[key] || 0;
+    if (stat.size < previous) {
+      sizeObj[key] = 0;
     }
-  } catch {}
-  return false;
-}
+    const start = sizeObj[key] || 0;
+    if (stat.size <= start) return '';
 
-function capturePane(pane) {
-  // -J: join wrapped lines, -p: to stdout, -S -80: last 80 lines of scrollback
-  return run(`tmux capture-pane -J -p -S -80 -t ${SESSION_NAME}:0.${pane}`);
+    const len = stat.size - start;
+    const fd = fs.openSync(filePath, 'r');
+    try {
+      const buf = Buffer.alloc(len);
+      fs.readSync(fd, buf, 0, len, start);
+      sizeObj[key] = stat.size;
+      return buf.toString('utf8');
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch {
+    return '';
+  }
 }
 
 function sanitizeRoutedMessage(msg) {
@@ -190,6 +198,7 @@ function extractMessages(text, tag, labelSelf, labelOther, options = {}) {
 function startMessageRouter() {
   const fileSize = { claude: 0, codex: 0 };
   const sentMessages = new Map();
+  const partialLine = { claude: '', codex: '' };
   const MESSAGE_TTL_MS = 10 * 60 * 1000;
   const MAX_TRACKED = 200;
 
@@ -201,45 +210,44 @@ function startMessageRouter() {
       if (now - ts > MESSAGE_TTL_MS) sentMessages.delete(key);
     }
 
-    // --- Claude pane: detect new content, extract @codex: messages ---
-    if (hasNewContent(CLAUDE_LOG, fileSize, 'claude')) {
-      const captured = capturePane(0);
-      if (captured) {
-        // Skip last line (may be partial input line)
-        const lines = captured.split('\n');
-        const text = lines.slice(0, -1).join('\n');
-        const messages = extractMessages(text, '@codex:', '[From Claude]', '[From Codex]');
-        for (const msg of messages) {
-          const key = 'c2x:' + msg.slice(0, 120);
-          if (!sentMessages.has(key)) {
-            sentMessages.set(key, now);
-            log(`ROUTE Claude->Codex: ${msg.slice(0, 200)}`);
-            sendToPane(1, `[From Claude] ${msg}`);
-          }
+    // --- Claude pane: parse newly appended log text only ---
+    const newClaude = readNewContent(CLAUDE_LOG, fileSize, 'claude');
+    if (newClaude) {
+      const merged = partialLine.claude + newClaude;
+      const lines = merged.split('\n');
+      partialLine.claude = lines.pop() || '';
+      const text = lines.join('\n');
+      const messages = extractMessages(text, '@codex:', '[From Claude]', '[From Codex]');
+      for (const msg of messages) {
+        const key = 'c2x:' + msg.slice(0, 120);
+        if (!sentMessages.has(key)) {
+          sentMessages.set(key, now);
+          log(`ROUTE Claude->Codex: ${msg.slice(0, 200)}`);
+          sendToPane(1, `[From Claude] ${msg}`);
         }
       }
     }
 
-    // --- Codex pane: detect new content, extract @claude: messages ---
-    if (hasNewContent(CODEX_LOG, fileSize, 'codex')) {
-      const captured = capturePane(1);
-      if (captured) {
-        const lines = captured.split('\n');
-        const text = lines.slice(0, -1).join('\n');
-        const messages = extractMessages(
-          text,
-          '@claude:',
-          '[From Codex]',
-          '[From Claude]',
-          { maxLen: 52 }
-        );
-        for (const msg of messages) {
-          const key = 'x2c:' + msg.slice(0, 120);
-          if (!sentMessages.has(key)) {
-            sentMessages.set(key, now);
-            log(`ROUTE Codex->Claude: ${msg.slice(0, 200)}`);
-            sendToPane(0, `[From Codex] ${msg}`);
-          }
+    // --- Codex pane: parse newly appended log text only ---
+    const newCodex = readNewContent(CODEX_LOG, fileSize, 'codex');
+    if (newCodex) {
+      const merged = partialLine.codex + newCodex;
+      const lines = merged.split('\n');
+      partialLine.codex = lines.pop() || '';
+      const text = lines.join('\n');
+      const messages = extractMessages(
+        text,
+        '@claude:',
+        '[From Codex]',
+        '[From Claude]',
+        { maxLen: 52 }
+      );
+      for (const msg of messages) {
+        const key = 'x2c:' + msg.slice(0, 120);
+        if (!sentMessages.has(key)) {
+          sentMessages.set(key, now);
+          log(`ROUTE Codex->Claude: ${msg.slice(0, 200)}`);
+          sendToPane(0, `[From Codex] ${msg}`);
         }
       }
     }
