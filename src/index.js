@@ -106,6 +106,21 @@ function createTmuxSession() {
 
   // Mouse
   run(`tmux set-option -t ${SESSION_NAME} mouse on`);
+  // Clipboard integration (macOS)
+  run(`tmux set-option -t ${SESSION_NAME} set-clipboard on`);
+  run(`tmux set-option -t ${SESSION_NAME} mode-keys vi`);
+  run(`tmux set-option -ga -t ${SESSION_NAME} terminal-features ',xterm-256color:clipboard'`);
+  run(`tmux set-option -ga -t ${SESSION_NAME} terminal-features ',tmux-256color:clipboard'`);
+  // copy-mode: y copies selection to system clipboard
+  run(`tmux bind-key -T copy-mode-vi y send-keys -X copy-pipe-and-cancel "pbcopy"`);
+  run(`tmux bind-key -T copy-mode-vi v send-keys -X begin-selection`);
+  run(`tmux bind-key -T copy-mode y send-keys -X copy-pipe-and-cancel "pbcopy"`);
+  // mouse select end in copy-mode also pipes to clipboard
+  run(`tmux bind-key -T copy-mode-vi MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel "pbcopy"`);
+  run(`tmux bind-key -T copy-mode MouseDragEnd1Pane send-keys -X copy-pipe-and-cancel "pbcopy"`);
+  // quick bindings: Prefix + y copies current line, Prefix + Y copies visible pane
+  run(`tmux bind-key -t ${SESSION_NAME} y capture-pane -p -S -1 | pbcopy`);
+  run(`tmux bind-key -t ${SESSION_NAME} Y capture-pane -p -S -80 | pbcopy`);
 
   // Resize-friendly: use latest client size, aggressive resize
   run(`tmux set-option -t ${SESSION_NAME} window-size latest`);
@@ -277,7 +292,9 @@ function main() {
   console.log('');
   console.log(`  ${dim}Controls:${reset}`);
   console.log('    Mouse click          → Switch pane');
-  console.log('    Option + drag        → Copy text, then Cmd+C');
+  console.log('    Prefix + [           → Enter copy mode');
+  console.log('    In copy mode: v/y    → Select + copy to clipboard');
+  console.log('    Prefix + y / Prefix + Y → Copy line / pane');
   console.log('    Ctrl+B, d            → Detach (keep running)');
   console.log('');
   console.log(`  ${dim}Auto-routing:${reset}`);
